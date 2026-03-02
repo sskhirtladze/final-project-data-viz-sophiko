@@ -60,13 +60,11 @@ for s in sheet_names:
 
 merged_by_id = sheets[sheet_names[0]].copy()
 for s in sheet_names[1:]:
-    merged_by_id = merged_by_id.merge(
-        sheets[s], on="EconomyCode", how="outer", suffixes=("", "_dup")
-    )
-
-# Drop columns duplicated during repeated merges
-dup_cols = [c for c in merged_by_id.columns if c.endswith("_dup")]
-merged_by_id = merged_by_id.drop(columns=dup_cols)
+    # Drop columns already in merged_by_id (except the join key) so pandas 3+
+    # doesn't raise MergeError about duplicate suffix columns.
+    already = set(merged_by_id.columns) - {"EconomyCode"}
+    right = sheets[s].drop(columns=[c for c in sheets[s].columns if c in already])
+    merged_by_id = merged_by_id.merge(right, on="EconomyCode", how="outer")
 
 # 1b. Keep only the variables listed in EnviroVars.xlsx ----------------------
 env_codes = pd.read_excel(BREADY_DIR / "EnviroVars.xlsx")["Code"].tolist()
@@ -112,7 +110,7 @@ BR_AllScores = BR_AllScores.rename(columns={"Economy Code": "country_code"})
 BR_AllScores["country_code"] = BR_AllScores["country_code"].replace(ISO_FIX)
 
 BR_scores_env = BR_scores_env.merge(
-    BR_AllScores[["Economy", "country_code", "reg_fr", "pub_ser", "op_eff"]],
+    BR_AllScores[["Economy", "reg_fr", "pub_ser", "op_eff"]],
     left_on="EconomyName", right_on="Economy", how="left",
 ).drop(columns="Economy")
 

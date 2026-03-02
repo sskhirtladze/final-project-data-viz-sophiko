@@ -7,7 +7,7 @@ This project prepares and merges data for an environmental economics research pa
 
 ```bash
 conda env create -f environment.yml
-conda activate fire_analysis
+conda activate econ_data
 ```
 
 ## Data

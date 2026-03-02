@@ -16,7 +16,7 @@ This repository contains a data preprocessing pipeline for an Environmental Econ
 
 ```bash
 conda env create -f environment.yml
-conda activate fire_analysis
+conda activate econ_data
 ```
 
 The `environment.yml` is missing several required packages. Install them manually after activating the environment:
