@@ -11,3 +11,6 @@ data/derived-data/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Miscellaneous / non-pipeline files
+misc/
