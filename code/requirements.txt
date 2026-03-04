@@ -11,9 +11,9 @@ scikit-learn>=1.3   # RandomForestClassifier + PCA
 #                   # (requires R + lme4; excluded here because it fails on cloud)
 
 # Dashboard
-streamlit           # interactive dashboard (dashboard.py)
+streamlit>=1.29     # 1.29+ drops imghdr (removed in Python 3.13) and uses altair 5
 plotly              # choropleth + bar charts for dashboard
-altair>=4.0,<5      # pinned for Streamlit Cloud compatibility (Streamlit requires altair 4.x)
+altair>=5.0         # required by streamlit>=1.29
 
 # Plotting
 matplotlib>=3.7
