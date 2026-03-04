@@ -1,1 +1,6 @@
+# Raw and derived data — too large / sensitive for git
+data/raw-data/
+data/derived-data/
 
+# macOS metadata
+.DS_Store

@@ -1,9 +1,16 @@
-name: fire_analysis
+name: econ_data
 channels:
   - conda-forge
 dependencies:
   - python=3.11
+  - numpy
   - pandas
   - geopandas
   - matplotlib
   - shapely
+  - scikit-learn
+  - statsmodels
+  - openpyxl
+  - pyreadstat
+  - pip:
+    - pymer4
