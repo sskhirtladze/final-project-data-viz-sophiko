@@ -1,7 +1,7 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/YlfKWlZ5)
-# Environmental Economics — Data Pipeline
+# Environmental Economics — Data Pipeline & Dashboard
 
-This project prepares and merges data for an environmental economics research paper analyzing how business regulatory environments affect firm-level environmental behavior.
+This project prepares, analyzes, and visualizes data for an environmental economics research paper examining how business regulatory environments affect firm-level environmental behavior (CO₂ monitoring and energy management adoption).
 
 ## Setup
 
@@ -24,11 +24,45 @@ Raw data files go in `data/raw-data/` (excluded from git due to size):
 
 ## Usage
 
+Run the scripts in order:
+
+### 1. Preprocessing
+
+Merges and cleans all raw data sources into analysis-ready CSVs.
+
 ```bash
 python code/preprocessing.py
 ```
 
-Outputs are written to `data/derived-data/`:
+### 2. Analysis
+
+Runs PCA on B-Ready indices, logit regressions with clustered SEs, random forest feature importance, and produces all plots.
+
+```bash
+python code/analysis.py
+```
+
+### 3. Dashboard data (pre-build)
+
+Aggregates the 121 MB firm-level CSV down to a 16 KB country-level file for fast dashboard startup. Re-run whenever `ES_firm_level.csv` is regenerated.
+
+```bash
+python code/prepare_dashboard_data.py
+```
+
+### 4. Dashboard
+
+Interactive choropleth map + country profile panel. Requires steps 1–3 first.
+
+```bash
+streamlit run code/dashboard.py
+```
+
+## Outputs
+
+All outputs are written to `data/derived-data/`:
+
+**Preprocessing (`preprocessing.py`):**
 
 | File | Description |
 |---|---|
@@ -37,12 +71,37 @@ Outputs are written to `data/derived-data/`:
 | `BR_scores_env.csv` | B-Ready environmental sub-scores and PCA components |
 | `combined_data.csv` | Single file with all datasets merged |
 
+**Analysis (`analysis.py`):**
+
+| File | Description |
+|---|---|
+| `rf_importance.csv` | Random forest variable importance scores |
+| `rf_variable_importance.png/pdf` | Feature importance bar chart |
+| `marginal_effects_co.png/pdf` | Marginal effects forest plot — CO₂ monitoring |
+| `marginal_effects_em.png/pdf` | Marginal effects forest plot — energy management |
+| `marginal_effects_ctrl_co.png/pdf` | Marginal effects (controls only) — CO₂ monitoring |
+| `marginal_effects_ctrl_em.png/pdf` | Marginal effects (controls only) — energy management |
+| `epi_vs_country_fe_co.png/pdf` | EPI score vs country fixed effects — CO₂ monitoring |
+| `epi_vs_country_fe_em.png/pdf` | EPI score vs country fixed effects — energy management |
+| `bready_vs_adoption.png/pdf` | B-Ready score vs adoption rates scatter |
+| `adoption_heatmap.png/pdf` | Adoption rates by country heatmap |
+| `altair_*.html/png` | Interactive Altair charts (HTML + optional PNG) |
+
+**Dashboard (`prepare_dashboard_data.py`):**
+
+| File | Description |
+|---|---|
+| `dashboard_country_data.csv` | Pre-aggregated country-level data for dashboard (~16 KB, 183 rows) |
+
 ## Project Structure
 
 ```
 data/
-  raw-data/        # Source data (not tracked in git)
-  derived-data/    # Pipeline outputs (not tracked in git)
+  raw-data/                  # Source data (not tracked in git)
+  derived-data/              # Pipeline outputs (not tracked in git)
 code/
-  preprocessing.py # Full ETL pipeline (B-Ready → WDI/WGI/EPI → Enterprise Survey)
+  preprocessing.py           # ETL pipeline: B-Ready → WDI/WGI/EPI → Enterprise Survey
+  analysis.py                # Regressions, random forest, and all plots
+  prepare_dashboard_data.py  # Pre-builds dashboard_country_data.csv
+  dashboard.py               # Streamlit interactive dashboard
 ```

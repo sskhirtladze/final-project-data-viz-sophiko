@@ -5,12 +5,14 @@ dependencies:
   - python=3.11
   - numpy
   - pandas
-  - geopandas
   - matplotlib
-  - shapely
   - scikit-learn
   - statsmodels
   - openpyxl
   - pyreadstat
   - pip:
     - pymer4
+    - streamlit
+    - plotly
+    - altair>=5.0
+    - vl-convert-python

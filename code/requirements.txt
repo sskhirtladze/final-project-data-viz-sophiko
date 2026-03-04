@@ -1,15 +1,21 @@
 # Core data
 pandas>=2.0
-numpy>=1.24
+numpy
 pyreadstat          # read Stata .dta files
 openpyxl            # read .xlsx files
 
 # Modelling
 statsmodels>=0.14   # GLM logit with clustered SEs
 scikit-learn>=1.3   # RandomForestClassifier + PCA
-pymer4              # GLMER via R's lme4 (requires R + lme4 installed)
+pymer4              # optional: GLMER via R's lme4 (requires R + lme4 installed)
+
+# Dashboard
+streamlit           # interactive dashboard (dashboard.py)
+plotly              # choropleth + bar charts for dashboard
 
 # Plotting
 matplotlib>=3.7
-altair>=5.0
-vl-convert-python   # optional: enables PNG/SVG export from Altair
+
+# Optional interactive plots (analysis.py section 6)
+altair>=5.0         # interactive HTML charts
+vl-convert-python   # optional: PNG/SVG export from Altair
