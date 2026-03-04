@@ -2,5 +2,8 @@
 data/raw-data/
 data/derived-data/
 
+# Exception: pre-built dashboard dataset is small enough to track
+!data/derived-data/dashboard_country_data.csv
+
 # macOS metadata
 .DS_Store
