@@ -43,7 +43,7 @@ grp = (
         iso_code_es         = ("Country Code",            "first"),
         co2_monitoring_rate = ("monitors_co2_emissions",  "mean"),
         energy_mgmt_rate    = ("adopt_energy_management", "mean"),
-        n_firms             = ("monitors_co2_emissions",  "count"),
+        n_firms             = ("monitors_co2_emissions",  "size"),
         br_env              = ("br_env",                  "first"),
     )
     .reset_index()
@@ -52,11 +52,12 @@ grp["co2_monitoring_pct"] = grp["co2_monitoring_rate"] * 100
 grp["energy_mgmt_pct"]    = grp["energy_mgmt_rate"]    * 100
 grp = grp.drop(columns=["co2_monitoring_rate", "energy_mgmt_rate"])
 
-# 3. Left-join: EPI is the base (non-ES countries get NaN for ES fields)
-merged = epi_df.merge(
-    grp.drop(columns=["country_name"]),
-    left_on="iso_code", right_on="iso_code_es", how="left",
-).drop(columns=["iso_code_es"])
+# 3. Outer join: keep all EPI countries + ES countries not in EPI (HKG, SSD, PSE)
+grp_join = grp.rename(columns={"iso_code_es": "iso_code", "country_name": "es_country_name"})
+merged = epi_df.merge(grp_join, on="iso_code", how="outer")
+# Fill country_name for ES-only rows (no EPI entry)
+merged["country_name"] = merged["country_name"].fillna(merged["es_country_name"])
+merged = merged.drop(columns=["es_country_name"])
 
 # 4. Write
 DERIVED.mkdir(parents=True, exist_ok=True)
