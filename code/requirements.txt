@@ -17,6 +17,6 @@ plotly              # choropleth + bar charts for dashboard
 # Plotting
 matplotlib>=3.7
 
-# Optional interactive plots (analysis.py section 6)
-altair>=5.0         # interactive HTML charts
-vl-convert-python   # optional: PNG/SVG export from Altair
+# Optional interactive plots (analysis.py section 6) — not needed for dashboard
+# altair>=5.0       # interactive HTML charts
+# vl-convert-python # PNG/SVG export from Altair
