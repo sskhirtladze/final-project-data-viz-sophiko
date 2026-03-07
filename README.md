@@ -26,7 +26,20 @@ pip install -r requirements.txt
 
 ## Data
 
-Raw data files go in `data/raw-data/` (excluded from git due to size):
+Raw data files are excluded from git due to size. **Download the full `raw-data/` folder from Google Drive:**
+
+> <https://drive.google.com/drive/folders/1C87rdZlHB7fMg19mif9Mhl3avvcAPh0i?usp=drive_link>
+
+Place the downloaded contents inside `data/raw-data/` so the directory looks like this:
+
+```
+data/raw-data/
+  01_Scored economies/
+  P_Data_Extract_From_World_Development_Indicators/
+  P_Data_Extract_From_Worldwide_Governance_Indicators/
+  epi2024results.csv
+  New_Comprehensive_October_6_2025.dta
+```
 
 | File / Folder | Source | Description |
 |---|---|---|

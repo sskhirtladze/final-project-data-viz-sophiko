@@ -27,6 +27,9 @@ _freeze/
 .quarto/
 *_files/
 
+# Generated plots
+plots/
+
 # Jupyter
 .ipynb_checkpoints/
 
