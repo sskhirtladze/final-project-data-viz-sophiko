@@ -1,15 +1,14 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/YlfKWlZ5)
-# Environmental Economics — Data Pipeline & Dashboard
+# Data Viz Final Project  — Data Pipeline & Dashboard
 
-This project prepares, analyzes, and visualizes data for an environmental economics research paper examining how business regulatory environments affect firm-level environmental behavior (CO₂ monitoring and energy management adoption).
+This project prepares, analyzes, and visualizes data for the Data Analytics and Visualization for Public Policy course final project examining how business regulatory environments affect firm-level environmental behavior (CO₂ monitoring and energy management adoption).
 
 ## Streamlit App
 
 **Live dashboard:** <https://sskhirtladze-final-project-data-viz-sophik-codedashboard-b5qxmv.streamlit.app/>
 
-> **Note for reviewers:** Streamlit Community Cloud apps go to sleep after 24 hours of inactivity. If you see a "wake up" prompt when opening the link, click it and wait a few seconds — this is normal behavior and is not a bug.
+> **Note for reviewers:** Streamlit Community Cloud apps go to sleep after 24 hours of inactivity. If you see a "wake up" prompt when opening the link, click it and wait a few seconds - this is normal behavior and is not a bug.
 
-The dashboard features an interactive choropleth map of green adoption rates and governance indicators across 40+ countries, plus a country-profile panel with EPI sub-indicator breakdowns and adoption comparisons.
+The dashboard features an interactive choropleth map of green adoption rates and governance indicators across 100+ countries, plus a country-profile panel with EPI sub-indicator breakdowns and adoption comparisons.
 
 ## Setup
 
