@@ -1,0 +1,659 @@
+---
+title: "What Drives Firms to Go Green?"
+author: "Sophiko Skhirtladze | Tue/Thurs Section 4 | GitHub: sskhirtladze"
+date: "2026-03-06"
+format:
+  html:
+    embed-resources: true
+    toc: false
+    format-links: false
+  pdf:
+    geometry: "margin=0.5in"
+    fontsize: 11pt
+    include-in-header:
+      text: |
+        \usepackage{titling}
+        \setlength{\droptitle}{-4em}
+        \pretitle{\begin{center}\large\bfseries}
+        \posttitle{\end{center}\vspace{-0.8em}}
+        \preauthor{\begin{center}\small}
+        \postauthor{\end{center}\vspace{-0.8em}}
+        \predate{\begin{center}\small}
+        \postdate{\end{center}\vspace{-1.2em}}
+execute:
+  echo: false
+  warning: false
+  message: false
+jupyter: dap
+---
+
+```{python}
+#| include: false
+import warnings
+warnings.filterwarnings("ignore")
+
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import statsmodels.formula.api as smf
+import altair as alt
+from IPython.display import Image as IPyImage, display as ipy_display
+
+REPO_DIR = Path(".")
+RAW_DIR  = REPO_DIR / "data" / "raw-data"
+OUT      = REPO_DIR / "data" / "derived-data"
+OUT.mkdir(exist_ok=True)
+PLOTS    = REPO_DIR / "plots"
+PLOTS.mkdir(exist_ok=True)
+
+BREADY_XLSX = RAW_DIR / "01_Scored economies" / "01_B-READY-2024-PILLAR-TOPIC-SCORES-2024_Final Data.xlsx"
+ENVIRO_XLSX = RAW_DIR / "01_Scored economies" / "EnviroVars.xlsx"
+BR_ALL_XLSX = RAW_DIR / "01_Scored economies" / "BR_AllScores.xlsx"
+WDI_CSV     = RAW_DIR / "P_Data_Extract_From_World_Development_Indicators" / "wdi_data.csv"
+WGI_CSV     = RAW_DIR / "P_Data_Extract_From_Worldwide_Governance_Indicators" / "d6b0dacf-eee4-491e-845c-1319e9c9909f_Data.csv"
+EPI_CSV     = RAW_DIR / "epi2024results.csv"
+ES_DTA      = RAW_DIR / "New_Comprehensive_October_6_2025.dta"
+
+def save_plot(chart, name):
+    """Save chart as HTML (interactive) and PNG (for PDF embedding), then display PNG."""
+    chart.save(str(PLOTS / f"{name}.html"))
+    png_path = PLOTS / f"{name}.png"
+    chart.save(str(png_path), scale_factor=2)
+    ipy_display(IPyImage(str(png_path)))
+```
+
+```{python}
+#| include: false
+# ── B-Ready indices ──────────────────────────────────────────────────────────
+_ISO_RECODE  = {"ROM": "ROU", "TMP": "TLS", "WBG": "PSE"}
+_BR_PREFIXES = ["BE", "BL", "US", "IT", "TX", "DR", "MC", "BI"]
+
+def build_bready():
+    xl = pd.ExcelFile(BREADY_XLSX)
+    sheets = {}
+    for s in xl.sheet_names:
+        df = xl.parse(s)
+        name_cols = [c for c in df.columns if "EconomyName" in c]
+        if name_cols:
+            df = df.rename(columns={name_cols[0]: "EconomyName"})
+        sheets[s] = df
+    merged = sheets[xl.sheet_names[0]].copy()
+    for s in xl.sheet_names[1:]:
+        already = set(merged.columns) - {"EconomyCode"}
+        right   = sheets[s].drop(columns=[c for c in sheets[s].columns if c in already])
+        merged  = merged.merge(right, on="EconomyCode", how="outer")
+    env_codes = pd.read_excel(ENVIRO_XLSX)["Code"].tolist()
+    env_cols  = [c for c in env_codes if c in merged.columns]
+    br = (merged[["EconomyName", "EconomyCode"] + env_cols]
+          .rename(columns={"EconomyName": "country_name", "EconomyCode": "country_code"})
+          .copy())
+    br["country_code"] = br["country_code"].replace(_ISO_RECODE)
+    br["br_env"] = br.select_dtypes("number").sum(axis=1, skipna=True)
+    for p in _BR_PREFIXES:
+        cols = [c for c in env_cols if c.startswith(p)]
+        br[p] = br[cols].sum(axis=1, skipna=True) if cols else 0.0
+    pca_input = br[_BR_PREFIXES].apply(pd.to_numeric, errors="coerce")
+    valid     = pca_input.dropna()
+    scaler    = StandardScaler()
+    pca       = PCA(n_components=len(_BR_PREFIXES))
+    scores    = pca.fit_transform(scaler.fit_transform(valid))
+    pc_names  = [f"PC{i+1}" for i in range(len(_BR_PREFIXES))]
+    br_pca = br.copy()
+    br_pca.loc[valid.index, pc_names] = scores
+    br_all = (pd.read_excel(BR_ALL_XLSX)
+              .rename(columns={"Economy Code": "country_code", "Economy": "country_name"})
+              .assign(country_code=lambda d: d["country_code"].replace(_ISO_RECODE)))
+    pillar_cols = [c for c in ["reg_fr", "pub_ser", "op_eff"] if c in br_all.columns]
+    br_pca = (br_pca
+              .merge(br_all[["country_name"] + pillar_cols], on="country_name", how="left")
+              .assign(country_name=lambda d:
+                      d["country_name"].replace({"Côte d'Ivoire": "Cote d'Ivoire"})))
+    return br_pca
+
+br_scores_env = build_bready()
+```
+
+```{python}
+#| include: false
+# ── Country-level controls ───────────────────────────────────────────────────
+def _pivot_wb_csv(path, year_col="2023 [YR2023]"):
+    df = pd.read_csv(path)
+    df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+    wide = (df[["Country Name", "Country Code", "Series Code", year_col]]
+            .pivot_table(index=["Country Name", "Country Code"],
+                         columns="Series Code", values=year_col, aggfunc="first")
+            .reset_index())
+    wide.columns.name = None
+    return wide
+
+def build_country_level():
+    wdi = _pivot_wb_csv(WDI_CSV).rename(columns={
+        "NY.GDP.PCAP.PP.CD": "gdp_per_capita_ppp",
+        "NE.TRD.GNFS.ZS":    "trade_gdp_share",
+        "NV.IND.TOTL.ZS":    "industry_share_gdp",
+        "FS.AST.PRVT.GD.ZS": "private_credit_gdp",
+        "GB.XPD.RSDV.GD.ZS": "r_d_expenditure_gdp",
+        "SE.TER.ENRR":        "tertiary_enrollment_pct",
+    })
+    wgi = _pivot_wb_csv(WGI_CSV).rename(columns={
+        "CC.EST": "control_corruption_est",  "CC.PER.RNK": "control_corruption_percent",
+        "GE.EST": "gov_effectiveness_est",   "GE.PER.RNK": "gov_effectiveness_percent",
+        "PV.EST": "political_stability_est", "PV.PER.RNK": "political_stability_percent",
+        "RQ.EST": "regulatory_quality_est",  "RQ.PER.RNK": "regulatory_quality_percent",
+        "RL.EST": "rule_of_law_est",         "RL.PER.RNK": "rule_of_law_percent",
+        "VA.EST": "voice_accountability_est","VA.PER.RNK": "voice_accountability_percent",
+    })
+    combined = wgi.merge(wdi, on="Country Code", how="outer", suffixes=("_wgi", "_wdi"))
+    if "Country Name_wgi" in combined.columns:
+        combined["country_name"] = (combined["Country Name_wgi"]
+                                    .fillna(combined.get("Country Name_wdi")))
+        combined = combined.drop(columns=["Country Name_wgi", "Country Name_wdi"], errors="ignore")
+    else:
+        combined = combined.rename(columns={"Country Name": "country_name"})
+    epi = pd.read_csv(EPI_CSV)[["iso", "EPI.new"]]
+    combined = combined.merge(epi, left_on="Country Code", right_on="iso", how="left")
+    combined["gdp_per_capita_ppp"] = np.log(combined["gdp_per_capita_ppp"])
+    br_merge_cols = ["country_code", "br_env"]
+    for extra in ["reg_fr", "pub_ser", "op_eff", "PC1", "PC2", "PC3"]:
+        if extra in br_scores_env.columns:
+            br_merge_cols.append(extra)
+    combined = combined.merge(
+        br_scores_env[br_merge_cols], left_on="Country Code",
+        right_on="country_code", how="left"
+    ).drop(columns="country_code", errors="ignore")
+    return combined
+
+country_level_vars = build_country_level()
+```
+
+```{python}
+#| include: false
+# ── Enterprise Survey cleaning ───────────────────────────────────────────────
+_NEG_NA        = [-9, -8, -7, -6, -5]
+_BR_FOLLOW_UP  = {"Bangladesh", "Indonesia", "Iraq", "Madagascar"}
+_BR_FOLLOW_DOWN = {"Sierra Leone", "Central African Republic"}
+_EXCEPT_ORIG   = {"Indonesia", "Timor-Leste", "Madagascar"}
+_NAME_FIX = {
+    "BurkinaFaso": "Burkina Faso", "Congo": "Congo, Rep.",
+    "CÃ´te d'Ivoire": "Cote d'Ivoire", "DRC": "Congo, Dem. Rep.",
+    "ElSalvador": "El Salvador", "Gambia": "Gambia, The",
+    "Hong Kong SAR China": "Hong Kong SAR, China", "Korea Republic": "Korea, Rep.",
+    "Taiwan China": "Taiwan, China", "West Bank And Gaza": "West Bank and Gaza",
+}
+_INDUSTRY_MAP = {1: "Manufacturing", 2: "Retail", 3: "Wholesale",
+                 4: "Construction", 51: "Hotel", 52: "Restaurant", 6: "Services"}
+
+def _col(df, name, fallback=np.nan):
+    return pd.to_numeric(df[name], errors="coerce") if name in df.columns \
+        else pd.Series(fallback, index=df.index, dtype=float)
+
+def build_firm_level():
+    _chunks = []
+    for _chunk in pd.read_stata(ES_DTA, convert_categoricals=False, chunksize=50_000):
+        _chunks.append(_chunk)
+    df = pd.concat(_chunks, ignore_index=True)
+    df = df[df["a14y"].between(2022, 2025, inclusive="both")].copy()
+    df["country_name"] = df["country"].str.extract(r"^([^0-9]+)")[0].str.strip()
+    df["year"]         = df["country"].str.extract(r"(\d+)")[0].astype(float)
+    num_cols = df.select_dtypes(include="number").columns
+    df[num_cols] = df[num_cols].replace(_NEG_NA, np.nan)
+    for col in num_cols:
+        vals = set(df[col].dropna().unique())
+        if vals and vals <= {1.0, 2.0}:
+            df[col] = df[col].map({1.0: 1.0, 2.0: 0.0})
+    df["BR_follow_up"]   = df["country_name"].isin(_BR_FOLLOW_UP).astype(int)
+    df["BR_follow_down"] = df["country_name"].isin(_BR_FOLLOW_DOWN).astype(int)
+    is_exc = df["country_name"].isin(_EXCEPT_ORIG)
+    is_fu  = df["BR_follow_up"] == 1
+    l1 = _col(df, "l1"); l1_br = _col(df, "l1_BR")
+    raw_l = np.where(is_exc, l1, np.where(is_fu & ~is_exc, l1_br, l1))
+    df["empl"] = np.where(raw_l > 0, np.log(np.where(raw_l > 0, raw_l, 1.0)), np.nan)
+    df["firm_age"]    = df["a14y"] - df["b5"]
+    df["ln_firm_age"] = np.where(df["firm_age"] > 0, np.log(df["firm_age"]), np.nan)
+    b2b = _col(df, "b2b")
+    df["foreign"]      = np.where(b2b.isna(), np.nan, (b2b >= 50).astype(float))
+    df["some_foreign"] = np.where(b2b.isna(), np.nan, (b2b >= 10).astype(float))
+    df["b7_sq"] = _col(df, "b7") ** 2
+    k82 = np.where(is_fu, _col(df, "k82_BR"), _col(df, "k82"))
+    df["has_financing"] = pd.Series(k82, index=df.index).map(
+        lambda v: 1.0 if v in (1, 2, 3) else (0.0 if v == 4 else np.nan))
+    df["ge3"] = np.where(is_fu & _col(df, "ge3_BR").notna(),
+                         _col(df, "ge3_BR"), _col(df, "ge3"))
+    ge3_v  = np.where(is_fu, _col(df, "ge3_BR"),  _col(df, "ge3"))
+    ge3a_v = np.where(is_fu, _col(df, "ge3a_BR"), _col(df, "ge3a"))
+    d2_v   = np.where(is_fu, _col(df, "d2_BR"),   _col(df, "d2"))
+    dmg = np.where(ge3_v == 2, 0.0,
+          np.where((ge3_v == 1) & (d2_v > 0) & (ge3a_v >= 0),
+                   ge3a_v / np.where(d2_v > 0, d2_v, np.nan), np.nan))
+    df["damage_share"]     = dmg
+    df["log_damage_share"] = np.where(dmg > 0, np.log(np.where(dmg > 0, dmg, np.nan)), np.nan)
+    valid_d1 = set(_INDUSTRY_MAP.keys())
+    d1_raw = np.where(df["country_name"] == "Indonesia", _col(df, "d1a1a"),
+             np.where(is_fu, _col(df, "d1a1a_BR"), _col(df, "d1a1a")))
+    df["d1a1a"] = pd.Series(d1_raw, index=df.index).map(
+        lambda v: _INDUSTRY_MAP.get(int(v)) if pd.notna(v) and int(v) in valid_d1 else np.nan)
+    use_br_exp = ~is_exc & is_fu
+    src_b = pd.Series(np.where(use_br_exp, _col(df, "d3b_BR"), _col(df, "d3b")), index=df.index, dtype="float64")
+    src_c = pd.Series(np.where(use_br_exp, _col(df, "d3c_BR"), _col(df, "d3c")), index=df.index, dtype="float64")
+    df["exporter"] = np.where((src_b > 10).fillna(False) | (src_c > 10).fillna(False), 1.0,
+                     np.where((src_b <= 10).fillna(False) & (src_c <= 10).fillna(False), 0.0, np.nan))
+    df["country_name"] = df["country_name"].replace(_NAME_FIX)
+    df["ge7"]  = np.where(is_fu, _col(df, "ge7_BR"), _col(df, "ge7"))
+    df["ge8d"] = np.where(is_fu,  _col(df, "ge8d_BR"),
+                 np.where(df["BR_follow_down"] == 1, _col(df, "ge8"), _col(df, "ge8d")))
+    j42_use_br = is_fu | df["country_name"].isin({"Peru", "Timor-Leste"})
+    df["has_government_contract"] = np.where(j42_use_br, _col(df, "j42_BR"), _col(df, "j42"))
+    is_indonesia = df["country_name"] == "Indonesia"
+    e6_use_br    = (is_fu | (df["country_name"] == "Peru")) & ~is_indonesia
+    df["e6_clean"] = np.where(is_indonesia, _col(df, "e6"),
+                     np.where(e6_use_br & _col(df, "e6_BR").notna(), _col(df, "e6_BR"), _col(df, "e6")))
+    df = df.rename(columns={
+        "ge7": "monitors_co2_emissions", "ge8d": "adopt_energy_management",
+        "empl": "num_employees", "some_foreign": "has_foreign_ownership",
+        "b1": "legal_status", "b4": "has_female_owner", "b3a": "owner_is_manager",
+        "b7": "manager_experience_years", "b7_sq": "manager_experience_years_sq",
+        "b7a": "manager_is_female", "l10": "has_training_programs",
+        "h1": "introduced_new_products", "h5": "introduced_new_process",
+        "h8": "has_rd_spending", "e6_clean": "uses_foreign_tech_license",
+        "c22b": "has_website_social_media", "k6": "has_bank_account",
+        "k7": "has_overdraft_facility", "k21": "has_external_audit",
+        "ge3": "experienced_climate_damage", "d1a1a": "main_activity_type",
+        "b8": "has_quality_certification", "exporter": "is_exporter",
+        "a14y": "interview_year",
+    })
+    df["legal_status"]       = df["legal_status"].astype("category")
+    df["main_activity_type"] = df["main_activity_type"].astype("category")
+    df["interview_year"]     = df["interview_year"].astype(str)
+    df = df.merge(country_level_vars, on="country_name", how="left")
+    return df
+
+ES_firm_level = build_firm_level()
+```
+
+```{python}
+#| include: false
+# ── Regression formulas (only what's needed for the 5 plots) ─────────────────
+FIRM_RHS = (
+    "num_employees + ln_firm_age + has_foreign_ownership + "
+    "C(legal_status) + has_female_owner + owner_is_manager + "
+    "manager_experience_years + manager_experience_years_sq + manager_is_female + "
+    "has_training_programs + introduced_new_products + introduced_new_process + "
+    "has_rd_spending + uses_foreign_tech_license + has_website_social_media + "
+    "has_bank_account + has_overdraft_facility + has_external_audit + "
+    "experienced_climate_damage + C(main_activity_type) + "
+    "has_quality_certification + is_exporter + has_government_contract"
+)
+COUNTRY_V1 = "gdp_per_capita_ppp + industry_share_gdp"
+WGI_V      = ("control_corruption_est + gov_effectiveness_est + "
+              "political_stability_est + regulatory_quality_est + "
+              "rule_of_law_est + voice_accountability_est")
+OUTCOMES   = [("monitors_co2_emissions", "co"), ("adopt_energy_management", "em")]
+
+_VAR_META = {
+    "has_training_programs":     ("Training programs",          "Firm Capabilities"),
+    "has_quality_certification": ("Quality certification",      "Firm Capabilities"),
+    "has_rd_spending":           ("R&D spending",               "Firm Capabilities"),
+    "uses_foreign_tech_license": ("Foreign technology",         "Firm Capabilities"),
+    "introduced_new_process":    ("Process innovation",         "Firm Capabilities"),
+    "introduced_new_products":   ("Product innovation",         "Firm Capabilities"),
+    "has_external_audit":        ("External audit",             "Firm Capabilities"),
+    "has_website_social_media":  ("Website/social media",       "Firm Capabilities"),
+    "has_bank_account":          ("Bank account",               "Financial Access"),
+    "has_overdraft_facility":    ("Overdraft facility",         "Financial Access"),
+    "num_employees":             ("Firm size (log employees)",  "Firm Characteristics"),
+    "ln_firm_age":               ("Firm age (log)",             "Firm Characteristics"),
+    "has_foreign_ownership":     ("Foreign ownership",          "Firm Characteristics"),
+    "owner_is_manager":          ("Owner is manager",           "Firm Characteristics"),
+    "manager_is_female":         ("Female manager",             "Firm Characteristics"),
+    "has_female_owner":          ("Female owner",               "Firm Characteristics"),
+    "manager_experience_years":  ("Manager experience",         "Firm Characteristics"),
+    "has_government_contract":   ("Government contract",        "Market Linkages"),
+    "is_exporter":               ("Exporter status",            "Market Linkages"),
+    "experienced_climate_damage":("Climate shock",              "Climate Exposure"),
+    "EPI.new":                   ("EPI",                        "ENV Governance"),
+    "br_env":                    ("B-Ready Env. Score",         "ENV Governance"),
+    "gdp_per_capita_ppp":        ("GDP per capita (PPP)",       "Country Context"),
+    "industry_share_gdp":        ("Industry share of GDP",      "Country Context"),
+    "control_corruption_est":    ("Control of corruption",      "Governance"),
+    "gov_effectiveness_est":     ("Government effectiveness",   "Governance"),
+    "political_stability_est":   ("Political stability",        "Governance"),
+    "regulatory_quality_est":    ("Regulatory quality",         "Governance"),
+    "rule_of_law_est":           ("Rule of law",                "Governance"),
+    "voice_accountability_est":  ("Voice & accountability",     "Governance"),
+}
+FIRM_VARS_PLOT = [
+    "has_training_programs", "has_quality_certification", "has_rd_spending",
+    "uses_foreign_tech_license", "introduced_new_process", "introduced_new_products",
+    "has_external_audit", "has_website_social_media",
+    "has_bank_account", "has_overdraft_facility",
+    "num_employees", "ln_firm_age", "has_foreign_ownership",
+    "owner_is_manager", "manager_is_female", "has_female_owner",
+    "manager_experience_years", "has_government_contract", "is_exporter",
+    "experienced_climate_damage",
+]
+CATEGORY_ORDER = [
+    "Firm Capabilities", "Financial Access", "Firm Characteristics",
+    "Market Linkages", "Climate Exposure"
+]
+```
+
+```{python}
+#| include: false
+# ── Fit logit with country + year FE (for EPI vs country FE plots) ───────────
+import patsy
+
+def logit_fe(outcome, data=ES_firm_level):
+    variation = (data.groupby("country_name")[outcome]
+                 .apply(lambda s: s.dropna().nunique()))
+    data_fe = data[data["country_name"].isin(variation[variation > 1].index)].copy()
+    formula = f"{outcome} ~ {FIRM_RHS} + C(country_name) + C(interview_year)"
+    _, X_temp = patsy.dmatrices(formula, data=data_fe,
+                                return_type="dataframe", NA_action="drop")
+    empty_dummies = [c for c in X_temp.columns
+                     if c.startswith("C(country_name)[T.") and X_temp[c].sum() == 0]
+    if empty_dummies:
+        bad = {c.split("[T.")[1].rstrip("]") for c in empty_dummies}
+        data_fe = data_fe[~data_fe["country_name"].isin(bad)].copy()
+    y_cc, _ = patsy.dmatrices(formula, data=data_fe,
+                               return_type="dataframe", NA_action="drop")
+    groups_cc = data_fe.loc[y_cc.index, "country_name"].values
+    return smf.logit(formula, data=data_fe).fit(
+        maxiter=300, disp=False,
+        cov_type="cluster", cov_kwds={"groups": groups_cc},
+    )
+
+# ── Fit logit with WDI/WGI/EPI controls (for marginal effects ctrl plots) ────
+def logit_ctrl(outcome, data=ES_firm_level):
+    country_ctrl = f"{COUNTRY_V1} + {WGI_V} + Q('EPI.new')"
+    formula = f"{outcome} ~ {FIRM_RHS} + {country_ctrl} + C(interview_year)"
+    y_cc, _ = patsy.dmatrices(formula, data=data,
+                               return_type="dataframe", NA_action="drop")
+    groups_cc = data.loc[y_cc.index, "country_name"].values
+    return smf.logit(formula, data=data).fit(
+        maxiter=300, disp=False,
+        cov_type="cluster", cov_kwds={"groups": groups_cc},
+    )
+
+glm_models  = {f"model_firm_1_{s}": logit_fe(o)   for o, s in OUTCOMES}
+ctrl_models = {s: logit_ctrl(o)                    for o, s in OUTCOMES}
+```
+
+```{python}
+#| include: false
+# ── Adoption heatmap data ─────────────────────────────────────────────────────
+_hm_needed = ["gdp_per_capita_ppp", "main_activity_type",
+              "monitors_co2_emissions", "adopt_energy_management"]
+hm_df = ES_firm_level.dropna(subset=_hm_needed).copy()
+country_gdp = (hm_df[["country_name", "gdp_per_capita_ppp"]]
+               .drop_duplicates("country_name")
+               .set_index("country_name")["gdp_per_capita_ppp"])
+income_map = pd.qcut(country_gdp, q=4,
+                     labels=["Low", "Lower-Mid", "Upper-Mid", "High"]).to_dict()
+hm_df["income_group"] = hm_df["country_name"].map(income_map)
+hm_agg = (hm_df.groupby(["main_activity_type", "income_group"], observed=True)
+          .agg(co2_rate=("monitors_co2_emissions", "mean"),
+               em_rate=("adopt_energy_management", "mean"))
+          .mul(100).reset_index()
+          .rename(columns={"main_activity_type": "sector"}))
+```
+
+## Research Question
+
+This paper examines the determinants of firms’ green practices using the data from the World Bank Enterprise Surveys, focusing on two specific behaviors: whether firms monitor their CO~2~ emissions, and whether they adopt energy management measures to reduce emissions, waste, or pollution. Both are drawn from the Green Economy module of the World Bank Enterprise Surveys and capture concrete, operational steps firms take in response to environmental pressures. The key question is whether institutional quality and environmental governance, captured by the Environmental Performance Index and B-Ready Environment Index, significantly influence these adoption decisions beyond what can be explained by firm characteristics and country economic and political context. The three visualizations below explore adoption patterns by sector and income group, the marginal effects of key predictors from the controls model, and the relationship between national EPI scores and country fixed effects extracted from the logit models.
+
+## Approach & Data
+The pipeline has four stages. First, country-level data are assembled by merging WDI, WGI, EPI, and B-Ready sources, with the B-Ready environmental index constructed manually by identifying environmentally tagged columns and summing them into a composite score. Second, the Enterprise Survey data are cleaned, including recoding negative survey values to missing, harmonizing variable names across countries that received different questionnaire versions, and merging in the country-level dataset. Third, two sets of logit models are estimated: fixed effects models with country and year dummies, and controls models that replace country dummies with macro and governance covariates.
+
+## Adoption Rate by Sector and Income Group
+
+```{python}
+income_order = ["Low", "Lower-Mid", "Upper-Mid", "High"]
+sector_order = ["Manufacturing", "Services", "Retail",
+                "Wholesale", "Hotel", "Restaurant", "Construction"]
+hm_long = hm_agg.melt(id_vars=["sector", "income_group"],
+                       value_vars=["co2_rate", "em_rate"],
+                       var_name="outcome", value_name="adoption_rate")
+hm_long["Outcome"] = hm_long["outcome"].map(
+    {"co2_rate": "CO2 Monitoring", "em_rate": "Energy Management"})
+
+chart1 = (
+    alt.Chart(hm_long).mark_rect()
+    .encode(
+        x=alt.X("income_group:N", sort=income_order, title="Income Group",
+                axis=alt.Axis(labelAngle=-35)),
+        y=alt.Y("sector:N", sort=sector_order, title="Sector"),
+        color=alt.Color("adoption_rate:Q",
+                        scale=alt.Scale(scheme="yelloworangered"),
+                        title="Rate (%)"),
+        tooltip=["sector:N", "income_group:N", "Outcome:N",
+                 alt.Tooltip("adoption_rate:Q", format=".1f", title="Rate (%)")]
+    )
+    .properties(width=220, height=170)
+    .facet(column=alt.Column("Outcome:N", title=""))
+    .properties(title=alt.TitleParams(
+        "Plot 1. Green Adoption Rate by Sector and Income Group (%)",
+        fontSize=13, fontWeight="bold", anchor="middle"))
+)
+
+save_plot(chart1, "adoption_heatmap")
+```
+Plot 1 shows green adoption rates by sector and income group as a faceted heatmap. Higher-income countries display markedly higher adoption across all sectors, with manufacturing leading. CO~2~ monitoring stays below 20% even in upper-middle-income groups, while energy management adoption reaches around 40% in high-income groups. Services and retail lag behind manufacturing, especially for CO~2~ monitoring. This underscores the uneven diffusion of green practices, with clear income and sectoral gradients. The next question is what drives these patterns once we control for firm and country characteristics.
+
+## Marginal Effects with Firm and Country Controls Model 
+Plots 2 displays average marginal effects from the controls model for CO~2~ monitoring 
+and energy management respectively. Firm capability variables, including foreign technology 
+use, quality certification, training programs, and R&D spending, consistently show the 
+largest positive and statistically significant effects across both outcomes, confirming that 
+organizational capacity and knowledge access are the primary drivers of green adoption. 
+Financial access variables are largely insignificant, suggesting credit constraints are not 
+the binding barrier. Experience with climate shocks and government procurement contracts 
+also raises the probability of adoption across both outcomes, pointing to the role of 
+realized physical risk and public sector incentives as indirect drivers of environmental 
+behavior.
+
+At the country level, EPI enters positively and significantly for both outcomes, indicating 
+that firms operating in countries with stronger national environmental performance are more 
+likely to adopt green practices even after controlling for firm characteristics and economic 
+context. By contrast, the B-Ready environmental index is neither economically nor 
+statistically significant, suggesting that the environmental content of business regulations 
+as currently measured does not translate into observable firm behavior. Governance indicators 
+are mixed, largely imprecise, and sometimes counterintuitive: rule of law enters negatively 
+for CO~2~ monitoring and control of corruption negatively for energy management, likely 
+reflecting multicollinearity among governance dimensions and the difference between mandatory 
+and voluntary adoption across institutional contexts. Taken together, the country-level 
+results speak directly to the research question: national environmental performance matters, 
+but general institutional quality has only a marginal and inconsistent influence on green 
+adoption.
+
+
+```{python}
+CAT_COLORS = {
+    "Firm Capabilities":    "#66c2a5",
+    "Financial Access":     "#fc8d62",
+    "Firm Characteristics": "#8da0cb",
+    "Market Linkages":      "#e78ac3",
+    "Climate Exposure":     "#a6d854",
+    "ENV Governance":       "#ffd92f",
+    "Country Context":      "#e5c494",
+    "Governance":           "#b3b3b3",
+}
+ALL_CATEGORY_ORDER = [
+    "Firm Capabilities", "Financial Access", "Firm Characteristics",
+    "Market Linkages", "Climate Exposure", "ENV Governance", "Country Context", "Governance"
+]
+ALL_VARS_PLOT = list(_VAR_META.keys())
+
+def _stars(p):
+    if p < 0.01: return "***"
+    if p < 0.05: return "**"
+    if p < 0.1:  return "*"
+    return ""
+
+def _mfx_df(result):
+    mfx = result.get_margeff(at="mean", method="dydx", dummy=True).summary_frame()
+    mfx.index = mfx.index.str.replace(r"Q\('(.+?)'\)", r"\1", regex=True)
+    cols = mfx.columns.tolist()
+    out = mfx.reset_index().rename(columns={
+        "index": "variable", cols[0]: "dydx",
+        cols[3]: "pval", cols[4]: "ci_lo", cols[5]: "ci_hi"})
+    out["label"]      = [_VAR_META.get(v, (v, "Other"))[0] for v in out["variable"]]
+    out["category"]   = [_VAR_META.get(v, (v, "Other"))[1] for v in out["variable"]]
+    out["label_star"] = out["label"] + out["pval"].apply(_stars)
+    return out
+
+def make_forest(mfx_df, var_list, title, width=330, height=320, x_domain=None):
+    df = mfx_df[mfx_df["variable"].isin(var_list)].copy()
+    cat_rank = {c: i for i, c in enumerate(ALL_CATEGORY_ORDER)}
+    df["cat_rank"] = df["category"].map(cat_rank).fillna(99)
+    df["abs_dydx"] = df["dydx"].abs()
+    df = df.sort_values(["cat_rank", "abs_dydx"], ascending=[True, False])
+    label_order = df["label_star"].tolist()
+    domain = list(CAT_COLORS.keys()); rng = list(CAT_COLORS.values())
+    color_enc = alt.Color("category:N", scale=alt.Scale(domain=domain, range=rng),
+                          legend=alt.Legend(title=""))
+    x_scale = alt.Scale(domain=x_domain) if x_domain else alt.Undefined
+    pts = (alt.Chart(df).mark_point(filled=True, size=55)
+           .encode(y=alt.Y("label_star:N", sort=label_order, title=""),
+                   x=alt.X("dydx:Q", title="Avg. Marginal Effect", scale=x_scale),
+                   color=color_enc,
+                   tooltip=["label:N", alt.Tooltip("dydx:Q", format=".3f", title="AME"),
+                            alt.Tooltip("pval:Q", format=".3f", title="p-value")]))
+    errs = (alt.Chart(df).mark_rule(opacity=0.55, strokeWidth=1.5)
+            .encode(y=alt.Y("label_star:N", sort=label_order),
+                    x=alt.X("ci_lo:Q", scale=x_scale),
+                    x2="ci_hi:Q", color=color_enc))
+    zero = (alt.Chart(pd.DataFrame({"x": [0]}))
+            .mark_rule(color="gray", strokeDash=[4, 4], opacity=0.7).encode(x="x:Q"))
+    return (pts + errs + zero).properties(
+        title=alt.TitleParams(title, fontSize=11, fontWeight="bold",
+                              subtitle="*** p<0.01   ** p<0.05   * p<0.1",
+                              subtitleFontSize=8),
+        width=width, height=height)
+
+mfx_co = _mfx_df(ctrl_models["co"])
+mfx_em = _mfx_df(ctrl_models["em"])
+
+_shared_x = [-0.4, 0.4]
+
+chart2 = make_forest(mfx_co, ALL_VARS_PLOT,
+    "CO2 Monitoring",
+    width=265, height=420, x_domain=_shared_x)
+chart3 = make_forest(mfx_em, ALL_VARS_PLOT,
+    "Energy Management",
+    width=265, height=420, x_domain=_shared_x)
+
+# Save individual HTMLs for interactivity
+chart2.save(str(PLOTS / "marginal_effects_ctrl_co.html"))
+chart3.save(str(PLOTS / "marginal_effects_ctrl_em.html"))
+
+# Side-by-side with shared overall title and legend
+combined23 = (alt.hconcat(chart2, chart3)
+    .resolve_legend(color="shared")
+    .properties(title=alt.TitleParams(
+        "Plot 2. Marginal Effects - Controls Model",
+        fontSize=13, fontWeight="bold", anchor="middle")))
+_png = PLOTS / "marginal_effects_ctrl_combined.png"
+combined23.save(str(_png), scale_factor=2)
+ipy_display(IPyImage(str(_png)))
+```
+
+
+## EPI Score vs Country Fixed Effects
+Plot 3 shows country fixed effects from the FE logit models against EPI scores. The near-flat trend for CO~2~ monitoring (r = +0.03) contrasts with the stronger positive relationship for energy management (r = +0.19), suggesting EPI captures institutional conditions that enable systematic energy practices more than emissions reporting behavior. Each point is a country, colored by whether the FE coefficient is statistically significant. The top outliers by residual and EPI score are labeled to highlight interesting cases that deviate from the overall trend, such as countries with high EPI but low FE or vice versa. This plot illustrates that even after controlling for firm characteristics there is significant heterogeneity in adoption of sustainable practices across countries only marginally explained by the EPI index.
+
+```{python}
+def _build_fe_df(result):
+    params  = result.params; pvalues = result.pvalues
+    mask    = params.index.str.startswith("C(country_name)[T.")
+    fe_df   = pd.DataFrame({
+        "country_name": [i.split("[T.")[1].rstrip("]") for i in params.index[mask]],
+        "fe_coef":      params[mask].values, "pval": pvalues[mask].values})
+    country_epi = (ES_firm_level[["country_name", "EPI.new"]]
+                   .drop_duplicates("country_name").dropna(subset=["EPI.new"]))
+    fe_df = (fe_df.merge(country_epi, on="country_name", how="inner")
+             .dropna(subset=["EPI.new", "fe_coef"])
+             .rename(columns={"EPI.new": "epi_score"})
+             .reset_index(drop=True))
+    fe_df["Sig"] = (fe_df["pval"] < 0.05).map({True: "p < 0.05", False: "p ≥ 0.05"})
+    return fe_df
+
+fe_co = _build_fe_df(glm_models["model_firm_1_co"])
+fe_em = _build_fe_df(glm_models["model_firm_1_em"])
+_pad = 0.3
+_shared_y = [min(fe_co["fe_coef"].min(), fe_em["fe_coef"].min()) - _pad,
+             max(fe_co["fe_coef"].max(), fe_em["fe_coef"].max()) + _pad]
+
+def make_epi_fe(fe_df, title, y_domain, width=350, height=230):
+    x_vals = fe_df["epi_score"].values
+    y_vals = fe_df["fe_coef"].values
+    slope, intercept = np.polyfit(x_vals, y_vals, 1)
+    corr     = np.corrcoef(x_vals, y_vals)[0, 1]
+    x_range  = np.linspace(max(x_vals.min(), 20), min(x_vals.max(), 80), 100)
+    trend_df = pd.DataFrame({"epi_score": x_range,
+                             "fe_coef":   slope * x_range + intercept})
+    fe_df = fe_df.copy()
+    fe_df["residual"] = np.abs(y_vals - (slope * x_vals + intercept))
+    to_label = pd.concat([
+        fe_df.nlargest(5, "residual"),
+        fe_df.nlargest(4, "epi_score"),
+        fe_df.nsmallest(4, "epi_score"),
+    ]).drop_duplicates("country_name")
+
+    scatter = (alt.Chart(fe_df).mark_point(filled=True, size=55)
+               .encode(x=alt.X("epi_score:Q", title="EPI Score (2024)",
+                               scale=alt.Scale(domain=[20, 80])),
+                       y=alt.Y("fe_coef:Q", title="Country FE (log-odds)",
+                               scale=alt.Scale(domain=y_domain)),
+                       color=alt.Color("Sig:N",
+                           scale=alt.Scale(domain=["p < 0.05", "p ≥ 0.05"],
+                                           range=["navy", "steelblue"]),
+                           legend=alt.Legend(title="")),
+                       opacity=alt.condition(
+                           alt.datum.Sig == "p < 0.05",
+                           alt.value(0.85), alt.value(0.45)),
+                       tooltip=["country_name:N",
+                                alt.Tooltip("epi_score:Q", format=".1f", title="EPI"),
+                                alt.Tooltip("fe_coef:Q", format=".2f", title="FE"),
+                                alt.Tooltip("pval:Q", format=".3f", title="p-value")]))
+    trend = (alt.Chart(trend_df).mark_line(color="firebrick", strokeWidth=1.8, opacity=0.9)
+             .encode(x=alt.X("epi_score:Q", scale=alt.Scale(domain=[20, 80])),
+                     y=alt.Y("fe_coef:Q",   scale=alt.Scale(domain=y_domain))))
+    zero  = (alt.Chart(pd.DataFrame({"y": [0]}))
+             .mark_rule(color="grey", strokeDash=[4, 4], strokeWidth=0.8, opacity=0.7)
+             .encode(y=alt.Y("y:Q", scale=alt.Scale(domain=y_domain))))
+    labels = (alt.Chart(to_label).mark_text(dx=5, dy=-6, fontSize=7, color="#333333",
+                                             align="left")
+              .encode(x=alt.X("epi_score:Q", scale=alt.Scale(domain=[20, 80])),
+                      y=alt.Y("fe_coef:Q",   scale=alt.Scale(domain=y_domain)),
+                      text="country_name:N"))
+    return (scatter + trend + zero + labels).properties(
+        title=alt.TitleParams(
+            title,
+            subtitle=f"OLS trend: r = {corr:+.2f}  |  n = {len(fe_df)} countries",
+            fontSize=11, fontWeight="bold", subtitleFontSize=9),
+        width=width, height=height)
+
+chart4 = make_epi_fe(fe_co, "CO2 Monitoring", _shared_y, width=290)
+chart5 = make_epi_fe(fe_em, "Energy Management", _shared_y, width=290)
+
+# Save individual HTMLs for interactivity
+chart4.save(str(PLOTS / "epi_vs_country_fe_co.html"))
+chart5.save(str(PLOTS / "epi_vs_country_fe_em.html"))
+
+# Side-by-side with shared overall title and legend
+combined45 = (alt.hconcat(chart4, chart5)
+    .resolve_legend(color="shared")
+    .properties(title=alt.TitleParams(
+        "Plot 3. EPI Score vs Country Fixed Effects",
+        fontSize=13, fontWeight="bold", anchor="middle")))
+_png = PLOTS / "epi_vs_country_fe_combined.png"
+combined45.save(str(_png), scale_factor=2)
+ipy_display(IPyImage(str(_png)))
+```
+
+
+## Streamlit App
+
+The interactive dashboard, deployed at <https://sskhirtladze-final-project-data-viz-sophik-codedashboard-b5qxmv.streamlit.app/>, lets users explore the country-level dimension of the research question interactively. The choropleth map visualizes adoption rates and EPI sub-indicators across all surveyed countries, while the country profile panel shows how any selected country compares to the cross-country average on green adoption, EPI sub-scores, and B-Ready environmental scores. This connects directly to the research question by making the cross-country variation in environmental governance and firm behavior visible and navigable in a way static plots cannot.

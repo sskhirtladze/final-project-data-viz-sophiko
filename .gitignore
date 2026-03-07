@@ -14,3 +14,24 @@ __pycache__/
 
 # Miscellaneous / non-pipeline files
 misc/
+
+# Python virtual environments
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+
+# Quarto build artifacts
+_freeze/
+.quarto/
+*_files/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor
+.vscode/
+
+# Assignment prompt (local reference only)
+Claude_Instructions.md

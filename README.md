@@ -3,11 +3,25 @@
 
 This project prepares, analyzes, and visualizes data for an environmental economics research paper examining how business regulatory environments affect firm-level environmental behavior (CO₂ monitoring and energy management adoption).
 
+## Streamlit App
+
+**Live dashboard:** <https://sskhirtladze-final-project-data-viz-sophik-codedashboard-b5qxmv.streamlit.app/>
+
+> **Note for reviewers:** Streamlit Community Cloud apps go to sleep after 24 hours of inactivity. If you see a "wake up" prompt when opening the link, click it and wait a few seconds — this is normal behavior and is not a bug.
+
+The dashboard features an interactive choropleth map of green adoption rates and governance indicators across 40+ countries, plus a country-profile panel with EPI sub-indicator breakdowns and adoption comparisons.
+
 ## Setup
 
 ```bash
 conda env create -f environment.yml
 conda activate econ_data
+```
+
+Or use an existing conda environment and install dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## Data
@@ -58,6 +72,16 @@ Interactive choropleth map + country profile panel. Requires steps 1–3 first.
 streamlit run code/dashboard.py
 ```
 
+### 5. Quarto writeup
+
+Renders `final_project.qmd` (runs the analysis pipeline internally):
+
+```bash
+quarto render final_project.qmd
+```
+
+Produces `final_project.html` and `final_project.pdf`, and saves charts to `plots/`.
+
 ## Outputs
 
 All outputs are written to `data/derived-data/`:
@@ -84,8 +108,19 @@ All outputs are written to `data/derived-data/`:
 | `epi_vs_country_fe_co.png/pdf` | EPI score vs country fixed effects — CO₂ monitoring |
 | `epi_vs_country_fe_em.png/pdf` | EPI score vs country fixed effects — energy management |
 | `bready_vs_adoption.png/pdf` | B-Ready score vs adoption rates scatter |
-| `adoption_heatmap.png/pdf` | Adoption rates by country heatmap |
+| `adoption_heatmap.png/pdf` | Adoption rates by sector/income heatmap |
 | `altair_*.html/png` | Interactive Altair charts (HTML + optional PNG) |
+| `marginal_effects_ctrl_co/em.csv` | Marginal effects data for QMD plots |
+| `epi_vs_country_fe_co/em.csv` | Country FE vs EPI data for QMD plots |
+| `adoption_heatmap.csv` | Aggregated heatmap data for QMD plots |
+
+**Quarto writeup (`final_project.qmd`):**
+
+| File | Description |
+|---|---|
+| `final_project.html` | Self-contained HTML with 5 interactive Altair plots |
+| `final_project.pdf` | PDF version (≤3 pages) |
+| `plots/*.html/png` | Saved chart files |
 
 **Dashboard (`prepare_dashboard_data.py`):**
 
@@ -101,7 +136,13 @@ data/
   derived-data/              # Pipeline outputs (not tracked in git)
 code/
   preprocessing.py           # ETL pipeline: B-Ready → WDI/WGI/EPI → Enterprise Survey
-  analysis.py                # Regressions, random forest, and all plots
+  analysis.py                # Regressions, random forest, plots, and intermediate CSVs
   prepare_dashboard_data.py  # Pre-builds dashboard_country_data.csv
-  dashboard.py               # Streamlit interactive dashboard
+  dashboard.py               # Streamlit interactive dashboard (deployed from code/)
+streamlit-app/
+  dashboard.py               # Copy of dashboard for Streamlit Community Cloud
+  prepare_dashboard_data.py  # Copy of data prep script
+plots/                       # Altair chart outputs (HTML + PNG) from final_project.qmd
+final_project.qmd            # Quarto writeup with 5 Altair plots (HTML + PDF output)
+requirements.txt             # Full pip dependency list
 ```

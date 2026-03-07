@@ -1331,7 +1331,11 @@ print("\n=== Controls-model logit (WDI + WGI + B-Ready) ===")
 ctrl_models_br = {}
 for outcome, suffix in OUTCOMES:
     print(f"  Fitting B-Ready controls model for {outcome}…")
-    ctrl_models_br[suffix] = logit_ctrl_br(outcome)
+    try:
+        ctrl_models_br[suffix] = logit_ctrl_br(outcome)
+    except RuntimeError as _e:
+        print(f"  Warning: B-Ready logit failed for {suffix} ({_e}) — br_env AME will be omitted.")
+        ctrl_models_br[suffix] = None
 
 print("\n=== Marginal Effects Forest Plots — Controls Model ===")
 for outcome, suffix in OUTCOMES:
@@ -1339,16 +1343,79 @@ for outcome, suffix in OUTCOMES:
     plot_marginal_effects_ctrl(ctrl_models[suffix], outcome, suffix,
                                result_br=ctrl_models_br[suffix])
 
+print("\n=== Saving Marginal Effects Controls CSV data ===")
+for outcome, suffix in OUTCOMES:
+    _result = ctrl_models[suffix]
+    _result_br = ctrl_models_br[suffix]
+    _mfx = _result.get_margeff(at="mean", method="dydx", dummy=True).summary_frame()
+    _mfx.index = _mfx.index.str.replace(r"Q\('(.+?)'\)", r"\1", regex=True)
+    if _result_br is not None:
+        _mfx_br = _result_br.get_margeff(at="mean", method="dydx", dummy=True).summary_frame()
+        if "br_env" in _mfx_br.index:
+            _mfx = pd.concat([_mfx, _mfx_br.loc[["br_env"]]])
+    _cols = _mfx.columns.tolist()
+    _mfx_out = _mfx.reset_index().rename(columns={
+        "index": "variable",
+        _cols[0]: "dydx",
+        _cols[3]: "pval",
+        _cols[4]: "ci_lo",
+        _cols[5]: "ci_hi",
+    })
+    _mfx_out["label"]    = [_VAR_META.get(v, (v, "Other"))[0] for v in _mfx_out["variable"]]
+    _mfx_out["category"] = [_VAR_META.get(v, (v, "Other"))[1] for v in _mfx_out["variable"]]
+    _mfx_out[["variable", "label", "category", "dydx", "pval", "ci_lo", "ci_hi"]].to_csv(
+        OUT / f"marginal_effects_ctrl_{suffix}.csv", index=False)
+    print(f"  Saved marginal_effects_ctrl_{suffix}.csv")
+
 print("\n=== EPI vs Country Fixed Effect Plots ===")
 for outcome, suffix in OUTCOMES:
     print(f"  Plotting {outcome}…")
     plot_epi_vs_country_fe(glm_models[f"model_firm_1_{suffix}"], outcome, suffix)
+
+print("\n=== Saving EPI vs Country FE CSV data ===")
+for outcome, suffix in OUTCOMES:
+    _result_fe = glm_models[f"model_firm_1_{suffix}"]
+    _params  = _result_fe.params
+    _pvalues = _result_fe.pvalues
+    _mask    = _params.index.str.startswith("C(country_name)[T.")
+    _fe_df = pd.DataFrame({
+        "country_name": [i.split("[T.")[1].rstrip("]") for i in _params.index[_mask]],
+        "fe_coef":      _params[_mask].values,
+        "pval":         _pvalues[_mask].values,
+    })
+    _country_epi = (ES_firm_level[["country_name", "EPI.new"]]
+                    .drop_duplicates("country_name")
+                    .dropna(subset=["EPI.new"]))
+    _fe_df = _fe_df.merge(_country_epi, on="country_name", how="inner")
+    _fe_df = _fe_df.rename(columns={"EPI.new": "epi_score"})
+    _fe_df[["country_name", "fe_coef", "pval", "epi_score"]].to_csv(
+        OUT / f"epi_vs_country_fe_{suffix}.csv", index=False)
+    print(f"  Saved epi_vs_country_fe_{suffix}.csv")
 
 print("\n=== B-Ready Environmental Score vs Adoption Rate ===")
 plot_bready_vs_adoption()
 
 print("\n=== Adoption Rate Heatmap (Sector × Income Group) ===")
 plot_adoption_heatmap(ES_firm_level, OUT)
+
+print("\n=== Saving Adoption Heatmap CSV data ===")
+_hm_needed = ["gdp_per_capita_ppp", "main_activity_type",
+              "monitors_co2_emissions", "adopt_energy_management"]
+_hm_df = ES_firm_level.dropna(subset=_hm_needed).copy()
+_hm_country_gdp = (_hm_df[["country_name", "gdp_per_capita_ppp"]]
+    .drop_duplicates("country_name")
+    .set_index("country_name")["gdp_per_capita_ppp"])
+_hm_income_map = pd.qcut(_hm_country_gdp, q=4,
+    labels=["Low", "Lower-Mid", "Upper-Mid", "High"]).to_dict()
+_hm_df["income_group"] = _hm_df["country_name"].map(_hm_income_map)
+_hm_agg = (_hm_df.groupby(["main_activity_type", "income_group"], observed=True)
+    .agg(co2_rate=("monitors_co2_emissions", "mean"),
+         em_rate=("adopt_energy_management", "mean"))
+    .mul(100)
+    .reset_index()
+    .rename(columns={"main_activity_type": "sector"}))
+_hm_agg.to_csv(OUT / "adoption_heatmap.csv", index=False)
+print("  Saved adoption_heatmap.csv")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1591,6 +1658,7 @@ if ALTAIR:
             records.append(mfx.reset_index(drop=False))
 
         df = pd.concat(records, ignore_index=True)
+        df["_zero"] = 0  # constant column for zero-reference rule in faceted layer
 
         # Consistent y-sort order taken from one outcome panel
         y_order      = df[df["outcome"] == "CO₂ Monitoring"]["label"].tolist()
@@ -1624,17 +1692,16 @@ if ALTAIR:
             ],
         )
 
-        zero_line = (
-            alt.Chart(pd.DataFrame({"x": [0]}))
-            .mark_rule(strokeDash=[4, 4], color="gray", strokeWidth=1)
-            .encode(x="x:Q")
+        # Use same data source so the layered chart can be faceted
+        zero_line = base.mark_rule(strokeDash=[4, 4], color="gray", strokeWidth=1).encode(
+            x="_zero:Q"
         )
 
         panel = (zero_line + ci_bars + dots).properties(width=300, height=380)
 
         chart = (
             panel
-            .facet(facet=alt.Facet("outcome:N", title=""), columns=2)
+            .facet(facet=alt.Facet("outcome:N", title=""), data=df, columns=2)
             .properties(
                 title=alt.TitleParams(
                     "Marginal Effects on Green Practice Adoption",
